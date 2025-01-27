@@ -216,10 +216,8 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
             let temperature_latitude = (self.virtual_latitude_fn)(x + dx, y + dy);
 
             let temperature_surface = 30.0 * (1.0 - temperature_latitude.abs().sin() * 3.0);
-            let temperature_with_foehn = temperature_surface
-                * (1.0 - primitive_elevation_normalized.max(0.0))
-                - (primitive_elevation.value.max(0.0) * 0.01) * 0.6;
-            temperature_with_foehn
+            temperature_surface * (1.0 - primitive_elevation_normalized.max(0.0))
+                - (primitive_elevation.value.max(0.0) * 0.01) * 0.6
         };
 
         Some(EnvironmentFactors {
