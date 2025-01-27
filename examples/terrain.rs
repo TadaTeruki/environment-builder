@@ -1,6 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
-use drainage_basin_builder::map::DrainageMap;
+use environment_builder::{
+    EnvironmentProvider, ReferenceEnvironmentParameters, ReferenceEnvironmentProvider,
+};
 use gtk4::{cairo::Context, prelude::WidgetExt, DrawingArea};
 use vislayers::{
     colormap::SimpleColorMap,
@@ -104,62 +106,110 @@ impl Layer for TerrainMap {
     }
 }
 
-struct DrainageMapWrapped(DrainageMap);
+struct EnvironmentProviderWrapped<T: EnvironmentProvider>(T, Vec<(String, f64)>);
 
-impl Layer for DrainageMapWrapped {
+impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
     fn draw(&self, drawing_area: &DrawingArea, cr: &Context, focus_range: &FocusRange) {
+        let img_width = drawing_area.width();
+        let img_height = drawing_area.height();
+
         let area_width = drawing_area.width();
         let area_height = drawing_area.height();
 
         let rect = focus_range.to_rect(area_width as f64, area_height as f64);
 
-        if focus_range.radius() > 0.1 {
-            for (_, node) in self.0.particle_map().iter() {
-                let river_width = node.river_width(self.0.river_strength());
-                if river_width < self.0.river_ignoreable_width() {
-                    continue;
+        let temperature_colormap = SimpleColorMap::new(
+            vec![[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+            vec![-30.0, 0.0, 30.0],
+        );
+
+        let grayscale_colormap =
+            SimpleColorMap::new(vec![[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], vec![0.0, 1.0]);
+
+        let size = 3;
+
+        let draw_dot = |ix: i32, iy: i32, color: [f64; 3], alpha: f64| {
+            cr.set_source_rgba(color[0], color[1], color[2], alpha);
+            cr.rectangle(
+                ix as f64 - size as f64 / 2.0,
+                iy as f64 - size as f64 / 2.0,
+                size as f64,
+                size as f64,
+            );
+            cr.fill().expect("Failed to fill rectangle");
+        };
+
+        let draw_arrow =
+            |ix: i32, iy: i32, angle: f64, color: [f64; 3], alpha: f64, length: f64| {
+                let multiple = 5;
+                if iy % (size * multiple) != 0 || ix % (size * multiple) != 0 {
+                    return;
                 }
-                let iter_num = (0.1 / focus_range.radius()).ceil() as usize;
 
-                let point_0 = node.main_river.evaluate(0.0);
-                let x0 = rect.map_coord_x(point_0.0, 0.0, area_width as f64);
-                let y0 = rect.map_coord_y(point_0.1, 0.0, area_height as f64);
+                let x = ix as f64;
+                let y = iy as f64;
+                let x1 = x + (size * multiple) as f64 * angle.cos() * length;
+                let y1 = y + (size * multiple) as f64 * angle.sin() * length;
 
-                cr.move_to(x0, y0);
+                cr.set_line_width(2.0);
 
-                for i in 1..(iter_num + 1) {
-                    let t = i as f64 / iter_num as f64;
+                cr.set_source_rgba(color[0], color[1], color[2], alpha);
+                cr.move_to(x, y);
+                cr.line_to(x1, y1);
+                cr.stroke().expect("Failed to draw arrow");
 
-                    let point_1 = node.main_river.evaluate(t);
-                    let x1 = rect.map_coord_x(point_1.0, 0.0, area_width as f64);
-                    let y1 = rect.map_coord_y(point_1.1, 0.0, area_height as f64);
+                cr.arc(x, y, size as f64 * 0.5, 0.0, 2.0 * std::f64::consts::PI);
+                cr.fill().expect("Failed to fill circle");
+            };
 
-                    cr.line_to(x1, y1);
-                }
+        let domains = &self.1;
 
-                cr.set_line_width(
-                    river_width / focus_range.radius() / self.0.particle_map().params().scale,
-                );
-                cr.set_source_rgb(0.0, 0.0, 1.0);
-                cr.set_line_cap(gtk4::cairo::LineCap::Round);
-                cr.stroke().expect("Failed to draw edge");
-            }
-        } else {
-            let img_width = drawing_area.width();
-            let img_height = drawing_area.height();
-
-            for iy in (0..img_height).step_by(6) {
-                for ix in (0..img_width).step_by(6) {
+        for (domain, alpha) in domains {
+            for iy in (0..img_height).step_by(size as usize) {
+                for ix in (0..img_width).step_by(size as usize) {
                     let prop_x = (ix as f64) / img_width as f64;
                     let prop_y = (iy as f64) / img_height as f64;
 
                     let x = rect.min_x + prop_x * rect.width();
                     let y = rect.min_y + prop_y * rect.height();
 
-                    if self.0.collides_with_river(x, y) {
-                        cr.set_source_rgb(0.0, 0.0, 1.0);
-                        cr.rectangle(ix as f64 - 1.0, iy as f64 - 1.0, 3.0, 3.0);
-                        cr.fill().expect("Failed to fill rectangle");
+                    let environment = self.0.get_factors(x, y);
+                    if let Some(environment) = environment {
+                        match domain.as_str() {
+                            "temperature" => {
+                                let temperature = environment.temperature;
+                                let color = temperature_colormap.get_color(temperature);
+                                draw_dot(ix, iy, color, *alpha);
+                            }
+                            "primitive_shelf" => {
+                                let primitive_shelf = environment.primitive_shelf;
+                                let color = grayscale_colormap.get_color(primitive_shelf);
+                                draw_dot(ix, iy, color, *alpha);
+                            }
+                            "primitive_persistence" => {
+                                let primitive_persistence = environment.primitive_persistence;
+                                let color = grayscale_colormap.get_color(primitive_persistence);
+                                draw_dot(ix, iy, color, *alpha);
+                            }
+                            "primitive_elevation" => {
+                                let primitive_elevation = environment.primitive_elevation;
+                                let color =
+                                    grayscale_colormap.get_color(primitive_elevation.normalized);
+                                draw_dot(ix, iy, color, *alpha);
+                            }
+                            "ocean_current" => {
+                                let ocean_current_angle = environment.ocean_current_angle;
+                                draw_arrow(
+                                    ix,
+                                    iy,
+                                    ocean_current_angle,
+                                    [1.0, 0.0, 0.0],
+                                    *alpha,
+                                    environment.ocean_current_speed * 0.2,
+                                );
+                            }
+                            _ => break,
+                        };
                     }
                 }
             }
@@ -168,14 +218,22 @@ impl Layer for DrainageMapWrapped {
 }
 
 fn main() {
-    let particlemap_id = "10459088313066128168";
-    let terrain_path = format!("./data/in/{}.particlemap", particlemap_id);
-    let terrain_map = TerrainMap::new(&terrain_path, 0.0025);
-    let drainage_path = format!("./data/out/drainage-{}.particlemap", particlemap_id);
-    let drainage_map = DrainageMap::load_from_file(&drainage_path, 1.0, 0.01);
-
     let mut visualizer = Visualizer::new(800, 600);
-    visualizer.add_layer(Rc::new(RefCell::new(terrain_map)), 0);
-    visualizer.add_layer(Rc::new(RefCell::new(DrainageMapWrapped(drainage_map))), 1);
+    let environment_provider = ReferenceEnvironmentProvider::new(
+        None,
+        Box::new(|_, y| (y * std::f64::consts::PI / 4.0).sin()),
+        Box::new(|_, y| y.abs() < 1.0),
+        ReferenceEnvironmentParameters::default(),
+    );
+    visualizer.add_layer(
+        Rc::new(RefCell::new(EnvironmentProviderWrapped(
+            environment_provider,
+            vec![
+                ("primitive_elevation".to_string(), 1.0),
+                ("temperature".to_string(), 0.4),
+            ],
+        ))),
+        0,
+    );
     visualizer.run();
 }

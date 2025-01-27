@@ -1,10 +1,13 @@
 [package]
-name = "city_builder"
+name = "environment_builder"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gtk4 = "0.9"
+libnoise = "1.1.2"
 worley-particle = { git = "https://github.com/TadaTeruki/worley-particle", features = ["particlemap"] }
+
+[dev-dependencies]
+gtk4 = "0.9"
 vislayers = { git = "https://github.com/TadaTeruki/vislayers" }
-drainage-basin-builder = { git = "https://github.com/TadaTeruki/drainage-basin-builder" }
+simplecolormap = { git = "https://github.com/TadaTeruki/simplecolormap" }
