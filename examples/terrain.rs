@@ -229,8 +229,8 @@ fn main() {
         Rc::new(RefCell::new(EnvironmentProviderWrapped(
             environment_provider,
             vec![
-                ("primitive_elevation".to_string(), 1.0),
-                ("temperature".to_string(), 0.4),
+                ("temperature".to_string(), 1.0),
+                ("ocean_current".to_string(), 0.4),
             ],
         ))),
         0,

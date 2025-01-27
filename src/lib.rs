@@ -23,7 +23,7 @@ pub trait EnvironmentProvider {
 
 const NOISE_PRIMITIVE_CONTINENT: usize = 0;
 const NOISE_PRIMITIVE_PERSISTENCE: usize = 1;
-const NOISE_PRIMITIVE_ELEVATION: usize = 2;
+const NOISE_PRIMITIVE_LAND: usize = 2;
 const NOISE_OCEAN_CURRENT: usize = 3;
 const NOISE_END: usize = 10;
 
@@ -46,7 +46,7 @@ impl Default for ReferenceEnvironmentParameters {
             primitive_elevation_scale: 0.5,
 
             ocean_current_scale: 0.8,
-            ocean_current_elevation_effect_distance: 0.03,
+            ocean_current_elevation_effect_distance: 0.02,
         }
     }
 }
@@ -159,17 +159,19 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
             (self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_PERSISTENCE) * 0.5 + 0.5) * 0.7 + 0.2
         };
 
-        let primitive_elevation_normalized = {
+        let primitive_land = {
             let x = x / self.params.primitive_elevation_scale;
             let y = y / self.params.primitive_elevation_scale;
             let p = self
-                .get_noise(x, y, 8, primitive_persistence, NOISE_PRIMITIVE_ELEVATION)
+                .get_noise(x, y, 8, primitive_persistence, NOISE_PRIMITIVE_LAND)
                 .abs();
             primitive_shelf * p
         };
 
+        let primitive_elevation_normalized = primitive_land + primitive_shelf - 1.0;
+
         let primitive_elevation = ValueWithNormalized {
-            value: primitive_elevation_normalized * 10000.0 - (1.0 - primitive_shelf) * 10000.0,
+            value: primitive_elevation_normalized * 5000.0,
             normalized: primitive_elevation_normalized,
         };
 
@@ -191,7 +193,7 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
 
             let speed = speed * (1.0 - primitive_shelf_forward);
 
-            let grad_elevation = (primitive_shelf_forward - primitive_elevation.normalized)
+            let grad_elevation = (primitive_shelf_forward - primitive_shelf)
                 / (self.params.ocean_current_elevation_effect_distance * speed);
             let angle = if grad_elevation < 0.0 {
                 angle
@@ -212,7 +214,12 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
                 * self.params.ocean_current_elevation_effect_distance
                 * ocean_current_speed;
             let temperature_latitude = (self.virtual_latitude_fn)(x + dx, y + dy);
-            30.0 * (1.0 - temperature_latitude.abs().sin() * 3.0)
+
+            let temperature_surface = 30.0 * (1.0 - temperature_latitude.abs().sin() * 3.0);
+            let temperature_with_foehn = temperature_surface
+                * (1.0 - primitive_elevation_normalized.max(0.0))
+                - (primitive_elevation.value.max(0.0) * 0.01) * 0.6;
+            temperature_with_foehn
         };
 
         Some(EnvironmentFactors {
