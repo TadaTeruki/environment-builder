@@ -80,23 +80,25 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                     let environment = self.0.get_factors(x, y);
                     if let Some(environment) = environment {
                         match domain.as_str() {
-                            "temperature" => {
-                                let temperature = environment.temperature;
+                            "temperature_surface" => {
+                                let temperature = environment.temperature_surface;
                                 let color = temperature_colormap.get_color(temperature);
                                 draw_dot(ix, iy, color, *alpha);
                             }
                             "primitive_shelf" => {
-                                let primitive_shelf = environment.primitive_shelf;
-                                let color = grayscale_colormap.get_color(primitive_shelf);
+                                let primitive_shelf = environment.primitive_elevation_factors.shelf;
+                                let color = grayscale_colormap.get_color(primitive_shelf + 1.0);
                                 draw_dot(ix, iy, color, *alpha);
                             }
                             "primitive_persistence" => {
-                                let primitive_persistence = environment.primitive_persistence;
+                                let primitive_persistence =
+                                    environment.primitive_elevation_factors.persistence;
                                 let color = grayscale_colormap.get_color(primitive_persistence);
                                 draw_dot(ix, iy, color, *alpha);
                             }
                             "primitive_elevation" => {
-                                let primitive_elevation = environment.primitive_elevation;
+                                let primitive_elevation =
+                                    environment.primitive_elevation_factors.elevation;
                                 let color =
                                     grayscale_colormap.get_color(primitive_elevation.normalized);
                                 draw_dot(ix, iy, color, *alpha);
@@ -133,8 +135,9 @@ fn main() {
         Rc::new(RefCell::new(EnvironmentProviderWrapped(
             environment_provider,
             vec![
-                ("temperature".to_string(), 1.0),
-                ("ocean_current".to_string(), 0.4),
+                ("primitive_elevation".to_string(), 1.0),
+                ("ocean_current".to_string(), 0.5),
+                ("temperature_surface".to_string(), 0.5),
             ],
         ))),
         0,

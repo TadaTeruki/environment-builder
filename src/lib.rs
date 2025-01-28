@@ -5,13 +5,17 @@ pub struct ValueWithNormalized {
     pub normalized: f64,
 }
 
+pub struct PrimitiveElevationFactors {
+    pub shelf: f64,
+    pub persistence: f64,
+    pub elevation: ValueWithNormalized,
+}
+
 pub struct EnvironmentFactors {
     pub virtual_latitude: f64,
-    pub temperature: f64,
+    pub temperature_surface: f64,
 
-    pub primitive_shelf: f64,
-    pub primitive_persistence: f64,
-    pub primitive_elevation: ValueWithNormalized,
+    pub primitive_elevation_factors: PrimitiveElevationFactors,
 
     pub ocean_current_angle: f64,
     pub ocean_current_speed: f64,
@@ -30,8 +34,9 @@ const NOISE_END: usize = 10;
 pub struct ReferenceEnvironmentParameters {
     pub primitive_shelf_scale: f64,
     pub primitive_shelf_power: f64,
+    pub primitive_shelf_depth: f64,
     pub primitive_persistence_scale: f64,
-    pub primitive_elevation_scale: f64,
+    pub primitive_land_scale: f64,
 
     pub ocean_current_scale: f64,
     pub ocean_current_elevation_effect_distance: f64,
@@ -41,12 +46,13 @@ impl Default for ReferenceEnvironmentParameters {
     fn default() -> Self {
         Self {
             primitive_shelf_scale: 1.0,
-            primitive_shelf_power: 0.75,
-            primitive_persistence_scale: 0.07,
-            primitive_elevation_scale: 0.5,
+            primitive_shelf_power: 0.5,
+            primitive_shelf_depth: 0.3,
+            primitive_persistence_scale: 0.3,
+            primitive_land_scale: 1.0,
 
             ocean_current_scale: 0.8,
-            ocean_current_elevation_effect_distance: 0.02,
+            ocean_current_elevation_effect_distance: 0.03,
         }
     }
 }
@@ -136,6 +142,43 @@ impl ReferenceEnvironmentProvider {
 
         (final_angle, diff)
     }
+
+    fn get_primitive_elevation_factors(&self, x: f64, y: f64) -> PrimitiveElevationFactors {
+        let primitive_shelf = {
+            let x = x / self.params.primitive_shelf_scale;
+            let y = y / self.params.primitive_shelf_scale;
+            let n = self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_CONTINENT);
+            let sign = n.signum();
+            (n.abs().powf(self.params.primitive_shelf_power) * sign - 1.0)
+                * self.params.primitive_shelf_depth
+        };
+
+        let primitive_persistence = {
+            let x = x / self.params.primitive_persistence_scale;
+            let y = y / self.params.primitive_persistence_scale;
+            (self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_PERSISTENCE) * 0.5 + 0.5) * 0.6 + 0.2
+        };
+
+        let primitive_land = {
+            let x = x / self.params.primitive_land_scale;
+            let y = y / self.params.primitive_land_scale;
+            self.get_noise(x, y, 8, primitive_persistence, NOISE_PRIMITIVE_LAND)
+                .abs()
+        };
+
+        let primitive_elevation_normalized = primitive_land + primitive_shelf;
+
+        let primitive_elevation = ValueWithNormalized {
+            value: primitive_elevation_normalized * 5000.0,
+            normalized: primitive_elevation_normalized,
+        };
+
+        PrimitiveElevationFactors {
+            shelf: primitive_shelf,
+            persistence: primitive_persistence,
+            elevation: primitive_elevation,
+        }
+    }
 }
 
 impl EnvironmentProvider for ReferenceEnvironmentProvider {
@@ -143,37 +186,8 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
         if !(self.valid_fn)(x, y) {
             return None;
         }
-        let primitive_shelf_fn = |x: f64, y: f64| {
-            let x = x / self.params.primitive_shelf_scale;
-            let y = y / self.params.primitive_shelf_scale;
-            self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_CONTINENT)
-                .max(0.0)
-                .powf(self.params.primitive_shelf_power)
-        };
 
-        let primitive_shelf = primitive_shelf_fn(x, y);
-
-        let primitive_persistence = {
-            let x = x / self.params.primitive_persistence_scale;
-            let y = y / self.params.primitive_persistence_scale;
-            (self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_PERSISTENCE) * 0.5 + 0.5) * 0.7 + 0.2
-        };
-
-        let primitive_land = {
-            let x = x / self.params.primitive_elevation_scale;
-            let y = y / self.params.primitive_elevation_scale;
-            let p = self
-                .get_noise(x, y, 8, primitive_persistence, NOISE_PRIMITIVE_LAND)
-                .abs();
-            primitive_shelf * p
-        };
-
-        let primitive_elevation_normalized = primitive_land + primitive_shelf - 1.0;
-
-        let primitive_elevation = ValueWithNormalized {
-            value: primitive_elevation_normalized * 5000.0,
-            normalized: primitive_elevation_normalized,
-        };
+        let primitive_elevation_factors = self.get_primitive_elevation_factors(x, y);
 
         let (ocean_current_angle, ocean_current_speed) = {
             let x = x / self.params.ocean_current_scale;
@@ -183,30 +197,20 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
             let dist_grad = self.params.ocean_current_scale * 1e-5;
             let (gradient, diff) = self.get_gradient(16, 2, x, y, dist_grad, ocean_current_noise);
             let angle = gradient + std::f64::consts::PI / 4.0;
-            let speed = diff;
-
-            let primitive_shelf_forward = {
-                let dx = angle.cos() * self.params.ocean_current_elevation_effect_distance * speed;
-                let dy = angle.sin() * self.params.ocean_current_elevation_effect_distance * speed;
-                primitive_shelf_fn(x + dx, y + dy)
-            };
-
-            let speed = speed * (1.0 - primitive_shelf_forward);
-
-            let grad_elevation = (primitive_shelf_forward - primitive_shelf)
-                / (self.params.ocean_current_elevation_effect_distance * speed);
-            let angle = if grad_elevation < 0.0 {
-                angle
-            } else {
-                angle + std::f64::consts::PI / 4.0 * grad_elevation
-            };
+            let speed = diff
+                * (1.0
+                    - primitive_elevation_factors
+                        .elevation
+                        .normalized
+                        .max(0.0)
+                        .powf(0.5));
 
             (angle, speed)
         };
 
         let latitude = (self.virtual_latitude_fn)(x, y);
 
-        let temperature = {
+        let temperature_surface = {
             let dx = ocean_current_angle.cos()
                 * self.params.ocean_current_elevation_effect_distance
                 * ocean_current_speed;
@@ -215,17 +219,13 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
                 * ocean_current_speed;
             let temperature_latitude = (self.virtual_latitude_fn)(x + dx, y + dy);
 
-            let temperature_surface = 30.0 * (1.0 - temperature_latitude.abs().sin() * 3.0);
-            temperature_surface * (1.0 - primitive_elevation_normalized.max(0.0))
-                - (primitive_elevation.value.max(0.0) * 0.01) * 0.6
+            30.0 * (1.0 - temperature_latitude.abs().sin() * 3.0)
         };
 
         Some(EnvironmentFactors {
             virtual_latitude: latitude,
-            temperature,
-            primitive_shelf,
-            primitive_persistence,
-            primitive_elevation,
+            temperature_surface,
+            primitive_elevation_factors,
             ocean_current_angle,
             ocean_current_speed,
         })
