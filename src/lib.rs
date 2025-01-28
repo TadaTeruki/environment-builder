@@ -1,23 +1,52 @@
 use libnoise::{Generator, Simplex, Source};
 
+#[derive(Debug, Clone, Copy)]
+pub struct ValueRange {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ValueWithNormalized {
     pub value: f64,
     pub normalized: f64,
 }
 
+impl ValueWithNormalized {
+    pub fn from_normalized(normalized: f64, range: ValueRange) -> Self {
+        Self {
+            value: range.min + normalized * (range.max - range.min),
+            normalized,
+        }
+    }
+}
+
+/// primitive_elevation = primitive_land_base + primitive_shelf
+/// (if primitive_elevation > 0.0, primitive_elevation = primitive_elevation.powf(primitive_land_power))
+#[derive(Debug, Clone, Copy)]
 pub struct PrimitiveElevationFactors {
+    /// [-primitive_shelf_depth,0.0] (primitive_shelf_power applied)
     pub shelf: f64,
-    pub persistence: f64,
+    /// [0.0,1.0] (normalized)
+    pub persistence: ValueWithNormalized,
+    /// [0.0,1.0]
+    pub land_base: f64,
+    /// [-1.0, 1.0] (normalized)
     pub elevation: ValueWithNormalized,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct EnvironmentFactors {
+    /// [-PI/2, PI/2] (radian) (calculated by virtual_latitude_fn)
     pub virtual_latitude: f64,
+    /// (degree) (calculated by temperature_surface_fn)
     pub temperature_surface: f64,
 
+    /// [PrimitiveElevationFactors]
     pub primitive_elevation_factors: PrimitiveElevationFactors,
-
+    /// (radian)
     pub ocean_current_angle: f64,
+    /// [0.0, 1.0]
     pub ocean_current_speed: f64,
 }
 
@@ -35,11 +64,27 @@ pub struct ReferenceEnvironmentParameters {
     pub primitive_shelf_scale: f64,
     pub primitive_shelf_power: f64,
     pub primitive_shelf_depth: f64,
+
+    /// Acceptable range of persistence
+    pub primitive_persistence_range: ValueRange,
     pub primitive_persistence_scale: f64,
+
     pub primitive_land_scale: f64,
+    pub primitive_land_power: f64,
+
+    /// Real elevation range (m)
+    pub primitive_elevation_range: ValueRange,
 
     pub ocean_current_scale: f64,
+    /// Max distance of ocean current effect (particulary for temperature)
     pub ocean_current_elevation_effect_distance: f64,
+
+    /// (x, y) -> virtual_latitude [-PI/2, PI/2]
+    pub virtual_latitude_fn: Box<dyn Fn(f64, f64) -> f64>,
+    /// (x, y) -> valid or not
+    pub valid_fn: Box<dyn Fn(f64, f64) -> bool>,
+    /// latitude -> temperature_surface (degree)
+    pub temperature_surface_fn: Box<dyn Fn(f64) -> f64>,
 }
 
 impl Default for ReferenceEnvironmentParameters {
@@ -48,27 +93,34 @@ impl Default for ReferenceEnvironmentParameters {
             primitive_shelf_scale: 1.0,
             primitive_shelf_power: 0.5,
             primitive_shelf_depth: 0.3,
+
+            primitive_persistence_range: ValueRange { min: 0.2, max: 0.8 },
             primitive_persistence_scale: 0.3,
+
             primitive_land_scale: 1.0,
+            primitive_land_power: 2.0,
+
+            primitive_elevation_range: ValueRange { min: -5000.0, max: 5000.0 },
 
             ocean_current_scale: 0.8,
             ocean_current_elevation_effect_distance: 0.03,
+
+            virtual_latitude_fn: Box::new(|_, y| (y * std::f64::consts::PI / 4.0).sin()),
+            valid_fn: Box::new(|_, y| y.abs() < 1.0),
+            temperature_surface_fn: Box::new(|lat| 30.0 * (1.0 - lat.abs().sin() * 3.0)),
         }
     }
 }
 
 pub struct ReferenceEnvironmentProvider {
     noises: Vec<Simplex<2>>,
-    virtual_latitude_fn: Box<dyn Fn(f64, f64) -> f64>,
-    valid_fn: Box<dyn Fn(f64, f64) -> bool>,
+
     params: ReferenceEnvironmentParameters,
 }
 
 impl ReferenceEnvironmentProvider {
     pub fn new(
         seeds: Option<[u64; NOISE_END]>,
-        virtual_latitude_fn: Box<dyn Fn(f64, f64) -> f64>,
-        valid_fn: Box<dyn Fn(f64, f64) -> bool>,
         params: ReferenceEnvironmentParameters,
     ) -> Self {
         let noises = if let Some(seeds) = seeds {
@@ -83,8 +135,6 @@ impl ReferenceEnvironmentProvider {
 
         Self {
             noises,
-            virtual_latitude_fn,
-            valid_fn,
             params,
         }
     }
@@ -156,26 +206,31 @@ impl ReferenceEnvironmentProvider {
         let primitive_persistence = {
             let x = x / self.params.primitive_persistence_scale;
             let y = y / self.params.primitive_persistence_scale;
-            (self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_PERSISTENCE) * 0.5 + 0.5) * 0.6 + 0.2
+            
+            ValueWithNormalized::from_normalized(self.get_noise(x, y, 3, 0.5, NOISE_PRIMITIVE_PERSISTENCE) * 0.5 + 0.5, self.params.primitive_persistence_range)
         };
 
-        let primitive_land = {
+        let primitive_land_base = {
             let x = x / self.params.primitive_land_scale;
             let y = y / self.params.primitive_land_scale;
-            self.get_noise(x, y, 8, primitive_persistence, NOISE_PRIMITIVE_LAND)
+            self.get_noise(x, y, 8, primitive_persistence.value, NOISE_PRIMITIVE_LAND)
                 .abs()
         };
 
-        let primitive_elevation_normalized = primitive_land + primitive_shelf;
+        let mut primitive_elevation_normalized = primitive_land_base + primitive_shelf;
+        if primitive_elevation_normalized > 0.0 {
+            primitive_elevation_normalized = primitive_elevation_normalized.powf(self.params.primitive_land_power);
+        }
 
-        let primitive_elevation = ValueWithNormalized {
-            value: primitive_elevation_normalized * 5000.0,
-            normalized: primitive_elevation_normalized,
-        };
+        let primitive_elevation = ValueWithNormalized::from_normalized(
+            primitive_elevation_normalized,
+            self.params.primitive_elevation_range,
+        );
 
         PrimitiveElevationFactors {
             shelf: primitive_shelf,
             persistence: primitive_persistence,
+            land_base: primitive_land_base,
             elevation: primitive_elevation,
         }
     }
@@ -183,7 +238,7 @@ impl ReferenceEnvironmentProvider {
 
 impl EnvironmentProvider for ReferenceEnvironmentProvider {
     fn get_factors(&self, x: f64, y: f64) -> Option<EnvironmentFactors> {
-        if !(self.valid_fn)(x, y) {
+        if !(self.params.valid_fn)(x, y) {
             return None;
         }
 
@@ -202,13 +257,12 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
                     - primitive_elevation_factors
                         .elevation
                         .normalized
-                        .max(0.0)
-                        .powf(0.5));
+                        .max(0.0));
 
             (angle, speed)
         };
 
-        let latitude = (self.virtual_latitude_fn)(x, y);
+        let latitude = (self.params.virtual_latitude_fn)(x, y);
 
         let temperature_surface = {
             let dx = ocean_current_angle.cos()
@@ -217,9 +271,9 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
             let dy = ocean_current_angle.sin()
                 * self.params.ocean_current_elevation_effect_distance
                 * ocean_current_speed;
-            let temperature_latitude = (self.virtual_latitude_fn)(x + dx, y + dy);
+            let temperature_latitude = (self.params.virtual_latitude_fn)(x + dx, y + dy);
 
-            30.0 * (1.0 - temperature_latitude.abs().sin() * 3.0)
+            (self.params.temperature_surface_fn)(temperature_latitude)
         };
 
         Some(EnvironmentFactors {

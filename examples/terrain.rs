@@ -93,7 +93,7 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                             "primitive_persistence" => {
                                 let primitive_persistence =
                                     environment.primitive_elevation_factors.persistence;
-                                let color = grayscale_colormap.get_color(primitive_persistence);
+                                let color = grayscale_colormap.get_color(primitive_persistence.normalized);
                                 draw_dot(ix, iy, color, *alpha);
                             }
                             "primitive_elevation" => {
@@ -127,8 +127,6 @@ fn main() {
     let mut visualizer = Visualizer::new(800, 600);
     let environment_provider = ReferenceEnvironmentProvider::new(
         None,
-        Box::new(|_, y| (y * std::f64::consts::PI / 4.0).sin()),
-        Box::new(|_, y| y.abs() < 1.0),
         ReferenceEnvironmentParameters::default(),
     );
     visualizer.add_layer(
