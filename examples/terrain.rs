@@ -93,7 +93,8 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                             "primitive_persistence" => {
                                 let primitive_persistence =
                                     environment.primitive_elevation_factors.persistence;
-                                let color = grayscale_colormap.get_color(primitive_persistence.normalized);
+                                let color =
+                                    grayscale_colormap.get_color(primitive_persistence.normalized);
                                 draw_dot(ix, iy, color, *alpha);
                             }
                             "primitive_elevation" => {
@@ -101,6 +102,13 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                                     environment.primitive_elevation_factors.elevation;
                                 let color =
                                     grayscale_colormap.get_color(primitive_elevation.normalized);
+                                draw_dot(ix, iy, color, *alpha);
+                            }
+                            "atmosphere_pressure_normalized" => {
+                                let atmosphere_pressure_normalized =
+                                    environment.atmosphere_pressure_normalized;
+                                let color =
+                                    grayscale_colormap.get_color(atmosphere_pressure_normalized);
                                 draw_dot(ix, iy, color, *alpha);
                             }
                             "ocean_current" => {
@@ -125,10 +133,8 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
 
 fn main() {
     let mut visualizer = Visualizer::new(800, 600);
-    let environment_provider = ReferenceEnvironmentProvider::new(
-        None,
-        ReferenceEnvironmentParameters::default(),
-    );
+    let environment_provider =
+        ReferenceEnvironmentProvider::new(None, ReferenceEnvironmentParameters::default());
     visualizer.add_layer(
         Rc::new(RefCell::new(EnvironmentProviderWrapped(
             environment_provider,
@@ -136,6 +142,7 @@ fn main() {
                 ("primitive_elevation".to_string(), 1.0),
                 ("ocean_current".to_string(), 0.5),
                 ("temperature_surface".to_string(), 0.5),
+                //("atmosphere_pressure_normalized".to_string(), 0.5),
             ],
         ))),
         0,
