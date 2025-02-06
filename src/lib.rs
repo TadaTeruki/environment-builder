@@ -44,16 +44,19 @@ pub struct EnvironmentFactors {
 
     /// [-1.0, 1.0]
     pub atmosphere_pressure_normalized: f64,
+    pub atmosphere_current_angle: f64,
+    pub atmosphere_current_magnitude: f64,
 
     /// [PrimitiveElevationFactors]
     pub primitive_elevation_factors: PrimitiveElevationFactors,
     /// (radian)
     pub ocean_current_angle: f64,
     /// [0.0, 1.0]
-    pub ocean_current_speed: f64,
+    pub ocean_current_magnitude: f64,
 }
 
 pub trait EnvironmentProvider {
+    fn get_parameters(&self) -> &ReferenceEnvironmentParameters;
     fn get_factors(&self, x: f64, y: f64) -> Option<EnvironmentFactors>;
 }
 
@@ -112,7 +115,7 @@ impl Default for ReferenceEnvironmentParameters {
             },
 
             ocean_current_scale: 0.8,
-            ocean_current_elevation_effect_distance: 0.03,
+            ocean_current_elevation_effect_distance: 0.3,
 
             virtual_latitude_fn: Box::new(|_, y| (y * std::f64::consts::PI / 4.0).sin()),
             valid_fn: Box::new(|_, y| y.abs() < 1.0),
@@ -248,12 +251,9 @@ impl ReferenceEnvironmentProvider {
         x: f64,
         y: f64,
         noise_fn: impl Fn(f64, f64) -> f64,
-        scale: f64,
         angle_offset: f64,
         dist_grad: f64,
     ) -> (f64, f64) {
-        let x = x / scale;
-        let y = y / scale;
         let (gradient, diff) = self.get_gradient(x, y, dist_grad, noise_fn);
         let angle = gradient + angle_offset;
         (angle, diff)
@@ -261,6 +261,10 @@ impl ReferenceEnvironmentProvider {
 }
 
 impl EnvironmentProvider for ReferenceEnvironmentProvider {
+    fn get_parameters(&self) -> &ReferenceEnvironmentParameters {
+        &self.params
+    }
+
     fn get_factors(&self, x: f64, y: f64) -> Option<EnvironmentFactors> {
         if !(self.params.valid_fn)(x, y) {
             return None;
@@ -268,47 +272,66 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
 
         let primitive_elevation_factors = self.get_primitive_elevation_factors(x, y);
 
-        let ocean_current_noise =
-            |x: f64, y: f64| self.get_noise(x, y, 1, 0.5, NOISE_OCEAN_CURRENT);
+        let ocean_current_noise = |x: f64, y: f64| {
+            self.get_noise(
+                x / self.params.ocean_current_scale,
+                y / self.params.ocean_current_scale,
+                1,
+                0.0,
+                NOISE_OCEAN_CURRENT,
+            )
+        };
         let (ocean_current_angle, ocean_current_diff) = self.create_vector_field_noise(
             x,
             y,
             ocean_current_noise,
-            self.params.ocean_current_scale,
             std::f64::consts::PI / 4.0,
-            1e-5,
+            1e-9,
         );
-        let ocean_current_speed =
-            ocean_current_diff * (1.0 - primitive_elevation_factors.elevation.normalized.max(0.0));
+
+        // this maximum value is not accurate, but enough for this purpose
+        let perlin_noise_max_gradient = {
+            let pnmg1d = 30.0 / 8.0;
+            2.0 * (pnmg1d * pnmg1d * 2.0_f64).sqrt()
+        };
+
+        let ocean_current_magnitude = ocean_current_diff
+            * (1.0 - primitive_elevation_factors.elevation.normalized.max(0.0))
+            / perlin_noise_max_gradient
+            * self.params.ocean_current_scale;
 
         let latitude = (self.params.virtual_latitude_fn)(x, y);
 
         let temperature_surface = {
             let dx = ocean_current_angle.cos()
                 * self.params.ocean_current_elevation_effect_distance
-                * ocean_current_speed;
+                * ocean_current_magnitude;
             let dy = ocean_current_angle.sin()
                 * self.params.ocean_current_elevation_effect_distance
-                * ocean_current_speed;
+                * ocean_current_magnitude;
             let temperature_latitude = (self.params.virtual_latitude_fn)(x + dx, y + dy);
 
             (self.params.temperature_surface_fn)(temperature_latitude)
         };
 
-        let atmosphere_pressure_normalized = {
-            let y = y / self.params.primitive_land_scale;
-            (y * std::f64::consts::PI * 3.0).cos() * 0.5 + 0.5
-        };
+        let atmosphere_pressure_normalized_func =
+            |_: f64, y: f64| -(y * std::f64::consts::PI * 2.0).cos() * 0.5 + 0.5;
+        let atmosphere_pressure_normalized = atmosphere_pressure_normalized_func(x, y);
+        let (atmosphere_current_angle, atmsphere_current_diff) =
+            self.create_vector_field_noise(x, y, atmosphere_pressure_normalized_func, 0.0, 1e-5);
+        let atmosphere_current_magnitude = atmsphere_current_diff / std::f64::consts::PI;
 
         Some(EnvironmentFactors {
             virtual_latitude: latitude,
             temperature_surface,
 
             atmosphere_pressure_normalized,
+            atmosphere_current_angle,
+            atmosphere_current_magnitude,
 
             primitive_elevation_factors,
             ocean_current_angle,
-            ocean_current_speed,
+            ocean_current_magnitude,
         })
     }
 }

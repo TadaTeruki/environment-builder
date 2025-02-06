@@ -10,7 +10,10 @@ use vislayers::{
     window::{Layer, Visualizer},
 };
 
-struct EnvironmentProviderWrapped<T: EnvironmentProvider>(T, Vec<(String, f64)>);
+struct EnvironmentProviderWrapped<T: EnvironmentProvider> {
+    provider: T,
+    layers: Vec<(String, f64)>,
+}
 
 impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
     fn draw(&self, drawing_area: &DrawingArea, cr: &Context, focus_range: &FocusRange) {
@@ -66,9 +69,7 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                 cr.fill().expect("Failed to fill circle");
             };
 
-        let domains = &self.1;
-
-        for (domain, alpha) in domains {
+        for (layer, alpha) in &self.layers {
             for iy in (0..img_height).step_by(size as usize) {
                 for ix in (0..img_width).step_by(size as usize) {
                     let prop_x = (ix as f64) / img_width as f64;
@@ -77,9 +78,9 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                     let x = rect.min_x + prop_x * rect.width();
                     let y = rect.min_y + prop_y * rect.height();
 
-                    let environment = self.0.get_factors(x, y);
+                    let environment = self.provider.get_factors(x, y);
                     if let Some(environment) = environment {
-                        match domain.as_str() {
+                        match layer.as_str() {
                             "temperature_surface" => {
                                 let temperature = environment.temperature_surface;
                                 let color = temperature_colormap.get_color(temperature);
@@ -111,15 +112,24 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
                                     grayscale_colormap.get_color(atmosphere_pressure_normalized);
                                 draw_dot(ix, iy, color, *alpha);
                             }
-                            "ocean_current" => {
-                                let ocean_current_angle = environment.ocean_current_angle;
+                            "atmosphere_pressure_current" => {
                                 draw_arrow(
                                     ix,
                                     iy,
-                                    ocean_current_angle,
+                                    environment.atmosphere_current_angle,
                                     [1.0, 0.0, 0.0],
                                     *alpha,
-                                    environment.ocean_current_speed * 0.2,
+                                    environment.atmosphere_current_magnitude,
+                                );
+                            }
+                            "ocean_current" => {
+                                draw_arrow(
+                                    ix,
+                                    iy,
+                                    environment.ocean_current_angle,
+                                    [1.0, 0.0, 0.0],
+                                    *alpha,
+                                    environment.ocean_current_magnitude,
                                 );
                             }
                             _ => break,
@@ -133,18 +143,19 @@ impl<T: EnvironmentProvider> Layer for EnvironmentProviderWrapped<T> {
 
 fn main() {
     let mut visualizer = Visualizer::new(800, 600);
-    let environment_provider =
-        ReferenceEnvironmentProvider::new(None, ReferenceEnvironmentParameters::default());
+    let parameters = ReferenceEnvironmentParameters::default();
+    let environment_provider = ReferenceEnvironmentProvider::new(None, parameters);
     visualizer.add_layer(
-        Rc::new(RefCell::new(EnvironmentProviderWrapped(
-            environment_provider,
-            vec![
+        Rc::new(RefCell::new(EnvironmentProviderWrapped {
+            provider: environment_provider,
+            layers: vec![
                 ("primitive_elevation".to_string(), 1.0),
                 ("ocean_current".to_string(), 0.5),
                 ("temperature_surface".to_string(), 0.5),
-                //("atmosphere_pressure_normalized".to_string(), 0.5),
+                // ("atmosphere_pressure_normalized".to_string(), 0.5),
+                // ("atmosphere_pressure_current".to_string(), 0.5),
             ],
-        ))),
+        })),
         0,
     );
     visualizer.run();
