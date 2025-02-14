@@ -64,6 +64,7 @@ const NOISE_PRIMITIVE_CONTINENT: usize = 0;
 const NOISE_PRIMITIVE_PERSISTENCE: usize = 1;
 const NOISE_PRIMITIVE_LAND: usize = 2;
 const NOISE_OCEAN_CURRENT: usize = 3;
+const NOISE_ATMOSPHERE_PRESSURE: usize = 4;
 const NOISE_END: usize = 10;
 
 pub struct ReferenceEnvironmentParameters {
@@ -92,8 +93,13 @@ pub struct ReferenceEnvironmentParameters {
     /// latitude -> temperature_surface (degree)
     pub temperature_surface_fn: Box<dyn Fn(f64) -> f64>,
 
+    /// Number of samples for gradient calculation (shared)
     pub gradient_sample_num: i32,
+    /// Number of iterations for gradient calculation (shared)
     pub gradient_iteration: u32,
+
+    pub atmosphere_pressure_scale: f64,
+    pub atmosphere_pressure_noise_prop: f64,
 }
 
 impl Default for ReferenceEnvironmentParameters {
@@ -123,6 +129,9 @@ impl Default for ReferenceEnvironmentParameters {
 
             gradient_sample_num: 16,
             gradient_iteration: 2,
+
+            atmosphere_pressure_scale: 1.0,
+            atmosphere_pressure_noise_prop: 0.2,
         }
     }
 }
@@ -314,8 +323,14 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
             (self.params.temperature_surface_fn)(temperature_latitude)
         };
 
-        let atmosphere_pressure_normalized_func =
-            |_: f64, y: f64| -(y * std::f64::consts::PI * 2.0).cos() * 0.5 + 0.5;
+        let atmosphere_pressure_normalized_func = |x: f64, y: f64| {
+            let base = -(y * std::f64::consts::PI * 2.0).cos() * 0.5 + 0.5;
+            let x = x / self.params.atmosphere_pressure_scale;
+            let y = y / self.params.atmosphere_pressure_scale;
+            let noise = self.get_noise(x, y, 1, 0.5, NOISE_ATMOSPHERE_PRESSURE);
+            base * (1.0 - self.params.atmosphere_pressure_noise_prop)
+                + noise * self.params.atmosphere_pressure_noise_prop
+        };
         let atmosphere_pressure_normalized = atmosphere_pressure_normalized_func(x, y);
 
         let (atmosphere_current_angle, atmsphere_current_diff) = self.create_vector_field_noise(
