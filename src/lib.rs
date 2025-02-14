@@ -317,8 +317,15 @@ impl EnvironmentProvider for ReferenceEnvironmentProvider {
         let atmosphere_pressure_normalized_func =
             |_: f64, y: f64| -(y * std::f64::consts::PI * 2.0).cos() * 0.5 + 0.5;
         let atmosphere_pressure_normalized = atmosphere_pressure_normalized_func(x, y);
-        let (atmosphere_current_angle, atmsphere_current_diff) =
-            self.create_vector_field_noise(x, y, atmosphere_pressure_normalized_func, 0.0, 1e-5);
+
+        let (atmosphere_current_angle, atmsphere_current_diff) = self.create_vector_field_noise(
+            x,
+            y,
+            |x, y| atmosphere_pressure_normalized_func(x, y),
+            -(((y + 0.5) * std::f64::consts::PI).tan().abs() * (y * std::f64::consts::PI).sin())
+                .atan(),
+            1e-5,
+        );
         let atmosphere_current_magnitude = atmsphere_current_diff / std::f64::consts::PI;
 
         Some(EnvironmentFactors {

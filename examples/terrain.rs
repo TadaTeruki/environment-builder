@@ -149,11 +149,11 @@ fn main() {
         Rc::new(RefCell::new(EnvironmentProviderWrapped {
             provider: environment_provider,
             layers: vec![
-                ("primitive_elevation".to_string(), 1.0),
-                ("ocean_current".to_string(), 0.5),
-                ("temperature_surface".to_string(), 0.5),
-                // ("atmosphere_pressure_normalized".to_string(), 0.5),
-                // ("atmosphere_pressure_current".to_string(), 0.5),
+                // ("primitive_elevation".to_string(), 1.0),
+                // ("ocean_current".to_string(), 0.5),
+                // ("temperature_surface".to_string(), 0.5),
+                ("atmosphere_pressure_normalized".to_string(), 0.5),
+                ("atmosphere_pressure_current".to_string(), 0.5),
             ],
         })),
         0,
